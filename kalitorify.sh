@@ -235,6 +235,9 @@ setup_iptables() {
             iptables -A INPUT -m state --state ESTABLISHED -j ACCEPT
             iptables -A INPUT -i lo -j ACCEPT
 
+            # Limit traffic to prevent DoS attacks
+            iptables -A INPUT -p tcp --dport 22 -m limit --limit 5/min -j ACCEPT
+
             # Drop everything else
             iptables -A INPUT -j DROP
 
