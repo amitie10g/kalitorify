@@ -180,10 +180,6 @@ setup_general() {
 
     # write new nameserver
     printf "%s\\n" "nameserver 127.0.0.1" > /etc/resolv.conf
-
-    # reload systemd daemons
-    printf "%s\\n" "Reload systemd daemons"
-    systemctl --system daemon-reload
 }
 
 
@@ -234,9 +230,6 @@ setup_iptables() {
             ## *filter INPUT
             iptables -A INPUT -m state --state ESTABLISHED -j ACCEPT
             iptables -A INPUT -i lo -j ACCEPT
-
-            # Limit traffic to prevent DoS attacks
-            iptables -A INPUT -p tcp --dport 22 -m limit --limit 5/min -j ACCEPT
 
             # Drop everything else
             iptables -A INPUT -j DROP
@@ -295,6 +288,7 @@ check_ip() {
 
     # IP API URLs list
     local url_list=(
+     local url_list=(
         'https://icanhazip.com/'
         'https://api.ipify.org/'
         'https://myip.dnsomatic.com/'
@@ -325,7 +319,7 @@ check_ip() {
 check_status() {
     info "Check current status of Tor service"
 
-    if systemctl is-active tor.service >/dev/null 2>&1; then
+    if pgrep tor >/dev/null 2>&1; then
         msg "Tor service is active"
     else
         die "Tor service is not running! exit"
@@ -358,8 +352,8 @@ check_status() {
 start() {
     check_root
 
-    # Exit if tor.service is already active
-    if systemctl is-active tor.service >/dev/null 2>&1; then
+    # Exit if tor is already active
+    if pgrep tor >/dev/null 2>&1; then
         die "Tor service is already active, stop it first"
     fi
 
@@ -376,11 +370,14 @@ start() {
     sysctl -w net.ipv6.conf.default.disable_ipv6=1 >/dev/null 2>&1
 
     # start tor.service
-    printf "%s\\n" "Start Tor service"
+    printf "%s\\n" "Start Tor daemon"
 
-    if ! systemctl start tor.service >/dev/null 2>&1; then
-        die "can't start tor service, exit!"
+    if ! tor --daemon >/dev/null 2>&1; then
+        die "can't start tor daemon, exit!"
     fi
+    
+    printf "%s\\n" "Waiting 5 seconds for Tor bootstrap..."
+    sleep 5
 
     # set new iptables rules
     setup_iptables tor_proxy
@@ -401,14 +398,20 @@ stop() {
     check_root
 
     # don't run function if tor.service is NOT running!
-    if systemctl is-active tor.service >/dev/null 2>&1; then
+    if pgrep tor >/dev/null 2>&1; then
         info "Stopping Transparent Proxy"
 
         # resets default iptables rules
         setup_iptables default
 
         printf "%s\\n" "Stop tor service"
-        systemctl stop tor.service
+        
+        if pkill -x tor >/dev/null 2>&1; then
+            printf "%s\\n" "Tor daemon stopped."
+        else
+            # Fallback por si Tor fue iniciado por un sistema de servicio diferente
+            service tor stop
+        fi
 
         # restore /etc/resolv.conf:
         #
@@ -446,10 +449,13 @@ stop() {
 restart() {
     check_root
 
-    if systemctl is-active tor.service >/dev/null 2>&1; then
-        info "Change IP address"
+    if pgrep tor >/dev/null 2>&1; then
+        info "Change IP address (Restarting Tor daemon)"
 
-        systemctl restart tor.service
+        pkill -x tor
+        sleep 1
+        tor --daemon >/dev/null 2>&1
+
         sleep 1
         check_ip
         exit 0
@@ -466,8 +472,6 @@ usage() {
     printf "%s\\n\\n" "${signature}"
 
     printf "%s\\n\\n" "Usage: ${prog_name} [option]"
-
-    printf "%s\\n\\n" "Options:"
 
     printf "%s\\n" "-h, --help      show this help message and exit"
     printf "%s\\n" "-t, --tor       start transparent proxy through tor"
@@ -530,4 +534,3 @@ main() {
 
 # Call main
 main "${@}"
-
