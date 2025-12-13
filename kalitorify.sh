@@ -223,6 +223,9 @@ setup_iptables() {
                 iptables -t nat -A OUTPUT -d $lan -j RETURN
             done
 
+            # Allow to Docker network
+            iptables -A INPUT -d 172.16.0.0/12 -j ACCEPT
+
             # Redirects all other pre-routing and output to Tor's TransPort
             iptables -t nat -A OUTPUT -p tcp -m tcp --tcp-flags FIN,SYN,RST,ACK SYN -j REDIRECT --to-ports $trans_port
 
