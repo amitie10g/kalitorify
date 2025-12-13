@@ -290,7 +290,6 @@ check_ip() {
 
     # IP API URLs list
     local url_list=(
-     local url_list=(
         'https://icanhazip.com/'
         'https://api.ipify.org/'
         'https://myip.dnsomatic.com/'
