@@ -373,8 +373,27 @@ start() {
     # start tor.service
     printf "%s\\n" "Start Tor service"
 
-    if ! service tor start >/dev/null 2>&1; then
-        die "can't start tor service, exit!"
+    local tor_started=false
+
+    # Attempt to start using the 'sv' command from runit
+    if hash sv 2>/dev/null; then
+        printf "%s\\n" "Attempting start via sv (runit)..."
+        if sv start tor >/dev/null 2>&1; then
+            tor_started=true
+        fi
+    fi
+
+    # If sv failed or was not available, try the standard method (service wrapper)
+    if ! ${tor_started}; then
+        printf "%s\\n" "Attempting start via service..."
+        if service tor start >/dev/null 2>&1; then
+            tor_started=true
+        fi
+    fi
+
+    # Final check: if Tor still hasn't started, exit with an error
+    if ! ${tor_started}; then
+        die "Can't start Tor service using 'sv' or 'service', exit!"
     fi
 
     # set new iptables rules
@@ -395,14 +414,29 @@ stop() {
     check_root
 
     # don't run function if tor.service is NOT running!
-    if service tor status >/dev/null 2>&1; then
+    # Note: This initial check might still fail if 'service' is broken,
+    # but it allows the script to continue if Tor is running.
+    if service tor status >/dev/null 2>&1; then 
         info "Stopping Transparent Proxy"
 
         # resets default iptables rules
         setup_iptables default
 
         printf "%s\\n" "Stop tor service"
-        service tor stop
+
+        # Attempt graceful stop via sv (runit) or service
+        if hash sv 2>/dev/null; then
+            printf "%s\\n" "Attempting graceful stop via sv (runit)..."
+            sv stop tor >/dev/null 2>&1
+            sleep 1 # Give runit a moment to process it
+        else
+            service tor stop >/dev/null 2>&1
+        fi
+        # Force termination with pkill as a fallback
+        if pgrep -f /usr/bin/tor >/dev/null 2>&1; then
+             printf "${red}WARNING:${reset} Tor is still running. Forcing termination with pkill.\n"
+             pkill -TERM -f /usr/bin/tor
+        fi
 
         # restore /etc/resolv.conf:
         #
@@ -439,12 +473,56 @@ stop() {
 restart() {
     check_root
 
-    if service tor status >/dev/null 2>&1; then
+    # Enhanced status check to handle systems that do not use 'service'
+    local is_tor_active=false
+    if service tor status >/dev/null 2>&1 || ( hash sv 2>/dev/null && sv status tor | grep -q 'run:' ); then
+        is_tor_active=true
+    fi
+
+    if ${is_tor_active}; then
         info "Change IP address"
 
-        service tor restart
+        ### Robust STOP Logic ###
+        printf "%s\\n" "Stopping Tor to change circuit..."
+        if hash sv 2>/dev/null; then
+            printf "%s\\n" "Attempting graceful stop via sv (runit)..."
+            sv stop tor >/dev/null 2>&1
+        else
+            printf "%s\\n" "Attempting graceful stop via service..."
+            service tor stop >/dev/null 2>&1
+        fi
+        # Force termination with pkill as a fallback (Good practice)
+        pkill -TERM -f /usr/bin/tor >/dev/null 2>&1
+
+        ### Robust START Logic (using logic from start()) ###
+        printf "%s\\n" "Starting Tor for new circuit..."
+        
+        local tor_restarted=false
+        
+        if hash sv 2>/dev/null; then
+            printf "%s\\n" "Attempting start via sv (runit)..."
+            if sv start tor >/dev/null 2>&1; then
+                tor_restarted=true
+            fi
+        fi
+        
+        if ! ${tor_restarted}; then
+            printf "%s\\n" "Attempting start via service..."
+            if service tor start >/dev/null 2>&1; then
+                tor_restarted=true
+            fi
+        fi
+        
+        # Final check: if Tor still hasn't restarted, exit with an error
+        if ! ${tor_restarted}; then
+            die "Can't restart Tor service using 'sv' or 'service', exit!"
+        fi
+        
+
         sleep 1
         check_ip
+        
+        printf "\\n${b}${green}%s${reset} %s\\n" "[OK]" "New Tor circuit established"
         exit 0
     else
         die "Tor service is not running! exit"
